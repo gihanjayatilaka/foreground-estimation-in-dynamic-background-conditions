@@ -1,0 +1,4 @@
+Collect data
+Install opencv in python
+Import a mp4 file to python
+

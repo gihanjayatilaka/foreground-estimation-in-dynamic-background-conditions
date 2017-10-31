@@ -1,0 +1,4 @@
+GMM Gaussian Mixture Models 
+AGMM Adaptive Gaussian Mixture Models
+Image processing metrics
+Entrophy
