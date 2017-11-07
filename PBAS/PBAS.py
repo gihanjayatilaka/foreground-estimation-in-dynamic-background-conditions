@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 
-cap = cv2.VideoCapture("test3.avi")
+cap = cv2.VideoCapture(0)
 _, frame = cap.read()
 
 N = 30
@@ -63,7 +63,7 @@ def update_fg_mask(B, I):
     global FG_MASK
     FG_MASK = (tmp < N_min).astype('uint8')
 
-    conv_fg_mask()
+    #conv_fg_mask()
 
 # continuous iteration
 while (1):
