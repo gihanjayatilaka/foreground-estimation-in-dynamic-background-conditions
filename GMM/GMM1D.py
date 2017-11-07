@@ -94,6 +94,8 @@ for i in range(ITERATIONS): #ITERATIONS
 
     print("Probability cluster",prob_cluster)
 
+    if min(var_cluster)<1e-4:
+        break
 
 #    print("Cluster 1")
 #    print(condProb_cluster_pixel[0][:])
@@ -107,6 +109,7 @@ for c in range(clusters):
         for x in range(img.shape[1]):
             imgClusters[c][y][x]=int(condProb_cluster_pixel[c][y*img.shape[0]+x]*255)
     cv.imshow("Cluster "+str(c),imgClusters[c])
+    cv.imwrite(fileName.strip().split(".")[0]+" Cluster "+str(c)+".tiff",imgClusters[c])
 '''
 for y in range(img.shape[0]):
     for x in range(img.shape[1]):
