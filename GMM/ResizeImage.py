@@ -5,7 +5,7 @@ from PIL import Image
 
 
 
-img = cv.imread("img1.jpg")
+img = cv.imread("img7.jpg")
 
 OLD_H=img.shape[0]
 OLD_W=img.shape[1]
@@ -27,6 +27,6 @@ for r in range(NEW_H):
 print(newImg)
 newImg.astype(np.uint8)
 
-cv.imwrite("img1.tiff",newImg)
+cv.imwrite("img7.tiff",newImg)
 cv.imshow("Resized",newImg)
 cv.waitKey(3000) & 0xff
