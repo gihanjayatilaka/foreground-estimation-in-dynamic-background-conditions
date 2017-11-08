@@ -33,44 +33,21 @@ for c in range(clusters):
         condProb_cluster_pixel[c][p]=0.5
 '''
 
-
-for p in range(pixels):
-    condProb_cluster_pixel[np.random.randint(0,clusters)][p]=1
-
+for c in range(clusters):
+    mean_cluster[c]=(c/clusters)*255
 #print("start ",np.transpose(condProb_cluster_pixel).tolist())
 
 
 for i in range(ITERATIONS): #ITERATIONS
-
-    #cluster means
+    # prob(cluster/pixel)
     for c in range(clusters):
-        D=0
-        N=0
         for p in range(pixels):
-            N+=condProb_cluster_pixel[c][p]*float(im[p])
-            D+=condProb_cluster_pixel[c][p]
- #       print("mean= "+str(N)+"/"+str(D))
-        mean_cluster[c]=N/D
-
-    #tweak
-    if(i==3):
-        if np.var(mean_cluster)<5 :
-            for c in range(clusters):
-                mean_cluster[c]=255*(c/clusters)
-    #tweak over
-
-
-    #cluster variances
-    for c in range(clusters):
-        D=0
-        N=0
-        for p in range(pixels):
-            N+=condProb_cluster_pixel[c][p]*np.power((1.0*float(im[p]))-mean_cluster[c],2)
-            D+=condProb_cluster_pixel[c][p]
- #           print("ND",N,D)
-#        print("var"+str(N)+"/"+str(D))
-        var_cluster[c]=N/D
-
+            N=condProb_pixel_cluster[p][c]*prob_cluster[c]
+            D=0
+            for cc in range(clusters):
+                D+=condProb_pixel_cluster[p][cc]*prob_cluster[c]
+            condProb_cluster_pixel[c][p]=N/D
+            # cluster means
 
     #cluster probabilitis
     for c in range(clusters):
@@ -86,18 +63,35 @@ for i in range(ITERATIONS): #ITERATIONS
         for p in range(pixels):
             condProb_pixel_cluster[p][c]= (1/np.sqrt(2*np.pi*var_cluster[c])) * np.exp(-1* np.power(im[p]-mean_cluster[c],2) / (2*var_cluster[c]))
 
-    # prob(cluster/pixel)
+
+
     for c in range(clusters):
+        D = 0
+        N = 0
         for p in range(pixels):
-            N=condProb_pixel_cluster[p][c]*prob_cluster[c]
-            D=0
-            for cc in range(clusters):
-                D+=condProb_pixel_cluster[p][cc]*prob_cluster[c]
-            condProb_cluster_pixel[c][p]=N/D
+            N += condProb_cluster_pixel[c][p] * float(im[p])
+            D += condProb_cluster_pixel[c][p]
+            #       print("mean= "+str(N)+"/"+str(D))
+        mean_cluster[c] = N / D
+
+
+    #cluster variances
+    for c in range(clusters):
+        D=0
+        N=0
+        for p in range(pixels):
+            N+=condProb_cluster_pixel[c][p]*np.power((1.0*float(im[p]))-mean_cluster[c],2)
+            D+=condProb_cluster_pixel[c][p]
+ #           print("ND",N,D)
+#        print("var"+str(N)+"/"+str(D))
+        var_cluster[c]=N/D
+
+
+
+
     # output
     print("Iter "+str(i)+" over")
     print("Mean cluster",mean_cluster)
-
     print("Var cluster",var_cluster)
 
     print("Probability cluster",prob_cluster)
@@ -107,7 +101,7 @@ for i in range(ITERATIONS): #ITERATIONS
             for x in range(img.shape[1]):
                 imgClusters[c][y][x] = int(condProb_cluster_pixel[c][y * img.shape[0] + x] * 255)
     #    cv.imshow("Cluster " + str(c), imgClusters[c])
-        cv.imwrite("./results/"+fileName.strip().split(".")[0] + "- iter "+str(i)+" Cluster " + str(c) + ".tiff", imgClusters[c])
+        cv.imwrite(fileName.strip().split(".")[0] + "- iter "+str(i)+" Cluster " + str(c) + ".tiff", imgClusters[c])
 
 
     if min(var_cluster)<1e-4:
@@ -125,7 +119,13 @@ for c in range(clusters):
         for x in range(img.shape[1]):
             imgClusters[c][y][x]=int(condProb_cluster_pixel[c][y*img.shape[0]+x]*255)
     cv.imshow("Cluster "+str(c),imgClusters[c])
-    cv.imwrite("./results/"+fileName.strip().split(".")[0]+" Cluster "+str(c)+".tiff",imgClusters[c])
+    cv.imwrite(fileName.strip().split(".")[0]+" Cluster "+str(c)+".tiff",imgClusters[c])
+'''
+for y in range(img.shape[0]):
+    for x in range(img.shape[1]):
+        for c in range(clusters):
+            imgCol[y][x][c]=int(condProb_cluster_pixel[c][y*img.shape[0]+x]*255)
+'''
 
 
 cv.waitKey(0)
