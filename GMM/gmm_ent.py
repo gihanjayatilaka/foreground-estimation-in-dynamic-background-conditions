@@ -63,50 +63,30 @@ def gmm(data, clusters, ITERATIONS):
             _D = np.sum(condProb_pixel_cluster * np.repeat(data, clusters).reshape((-1, clusters)), 1)
             condProb_cluster_pixel[c] = (_N / _D)
 
-    return mean_cluster, var_cluster, condProb_cluster_pixel, condProb_pixel_cluster
 
-def find_fg(mean, var, var_thresh, prob_thresh):
-    small_var_cluster = []
+    return mean_cluster, var_cluster, prob_cluster
 
-    condProb_pixel_cluster = np.zeros((256, len(mean)))
-    
+def find_fg(mean, var, H, var_thresh,  prob_thresh):
 
-    for c in range(len(mean)):
-        if var[c] < var_thresh:
-            small_var_cluster.append(c)
-            condProb_pixel_cluster[:,c] = (1 / np.sqrt(2 * np.pi * var[c])) * np.exp(-1 * np.power(np.arange(256) - mean[c], 2) / (2 * var[c]))
+    m = H.max()
 
-    # finding the gaussian with min var ---and max probability---
-    '''
+    cc =[]
+    for i in range(len(H)):
+        for j in range(len(H[0])):
+            if H[i,j] == m:
+                cc = [i,j]
+
     mask = np.ones(256)
-    m = min(var)
-    for i in range(len(var)):
-        if var[i] == m:
-            idx = i
-    t = np.sqrt(var[idx])*3
+
+    tot = (1 / np.sqrt(2 * np.pi * var[cc[0]])) * np.exp(-1 * np.power(np.arange(256) - mean[cc[0]], 2) / (2 * var[cc[0]])) +\
+          (1 / np.sqrt(2 * np.pi * var[cc[1]])) * np.exp(-1 * np.power(np.arange(256) - mean[cc[1]], 2) / (2 * var[cc[1]]))
+    tot = tot/np.sum(tot)
     for i in range(256):
-        if i > mean[idx] - t and i < mean[idx] + t:
+        t1 = var[cc[0]]
+        t2 = var[cc[1]]
+
+        if i < (mean[cc[0]] + t1 and i > mean[cc[0]]-t1) or (mean[cc[1]] + t2 and i > mean[cc[1]]-t2):
             mask[i] = 0
-
-    return mask, condProb_pixel_cluster[:,idx]
-    '''
-    mask = np.ones(256)
-    tot = np.zeros(256)
-
-    for val in range(256):
-        tmp = 0
-        for c in small_var_cluster:
-            tmp += condProb_pixel_cluster[val,c]
-        tot[val] = tmp
-
-    max_tot = np.max(tot)
-    if max_tot == 0:
-        max_tot = 1
-    tot = tot/max_tot
-
-    for i in range(256):
-        if tot[i] > prob_thresh:
-            mask[i] = (1-tot[i])**40
 
     return mask, tot
 
@@ -142,29 +122,32 @@ def plot_helper(curves, data):
     pg.QtGui.QApplication.processEvents()
 
 def load_log( clusters, iter, start, end, file, height, width):
-    log = open("log.txt",'r')
+    log = open("log_agmm.txt", 'r')
 
     load = False
-    mean,var = {},{}
+    mean, var, prob = {}, {}, {}
     for x in range(width):
         for y in range(height):
-            mean["{},{}".format(x,y)] = None
-            var["{},{}".format(x,y)] = None
+            mean["{},{}".format(x, y)] = None
+            var["{},{}".format(x, y)] = None
+            prob["{},{}".format(x, y)] = None
 
     for line in log:
         v = line.strip().split()
         if v[0] == "NE":
-            if v[1:] == list(map(str,[clusters, iter, start, end, file])):
+            if v[1:] == list(map(str, [clusters, iter, start, end, file])):
                 load = True
             else:
                 load = False
 
         if load:
             if v[0] == "MEAN":
-                mean[v[1]] = (list(map(float,v[2].split(','))))
+                mean[v[1]] = list(map(float, v[2].split(',')))
             elif v[0] == "VAR":
-                var[v[1]] = (list(map(float, v[2].split(','))))
-    return mean, var
+                var[v[1]] = list(map(float, v[2].split(',')))
+            elif v[0] == "PROB":
+                prob[v[1]] = list(map(float, v[2].split(',')))
+    return mean, var, prob
 
 def display_results(start, end, _input, _output):
     cap = cv2.VideoCapture(_output)
@@ -180,7 +163,7 @@ def display_results(start, end, _input, _output):
 if __name__ == '__main__':
 
     cap = cv2.VideoCapture("output_video.avi")
-    frame_num = 1401
+    frame_num = 1
 
     file_name = './dataset/dynamicBackground/boats/input/in{0:0>6}.jpg'
 
@@ -227,8 +210,11 @@ if __name__ == '__main__':
 
         if frame_num%N == 0:
 
-            mean_dict, var_dict = load_log(clusters, iterations, frame_num - N, frame_num, file_name, _height,_width)
-            log = open('log.txt', 'a')
+            mean_dict, var_dict, prob_dict = load_log(clusters, iterations, frame_num - N, frame_num, file_name, _height,_width)
+            H = np.zeros((_height,_width,clusters,clusters))
+
+
+            log = open('log_agmm.txt', 'a')
             log.write("NE " + str(clusters) + " " + str(iterations) + " " + str(frame_num - N)+" "+ str(frame_num)+" " + file_name+'\n')
 
             # estimating gaussians
@@ -254,13 +240,15 @@ if __name__ == '__main__':
                     for i in range(N):
                         data[history[i,y,x,1]] += 1
 
-                    mean_cluster, var_cluster, condProb_cluster_pixel, condProb_pixel_cluster = gmm(data, clusters, iterations)
+                    mean_cluster, var_cluster, prob_cluster = gmm(data, clusters, iterations)
                     
                     mean_dict[index] = mean_cluster
                     var_dict[index] = var_cluster
+                    prob_dict[index] = prob_cluster
 
                     log.write("MEAN "+index+" "+",".join(map(str,mean_cluster))+'\n')
                     log.write("VAR " + index +" "+ ",".join(map(str, var_cluster))+'\n')
+                    log.write("PROB " + index +" "+ ",".join(map(str, prob_cluster))+'\n')
             print('\n')
 
 
@@ -282,7 +270,28 @@ if __name__ == '__main__':
                     index = "{},{}".format(x,y)
                     if mean_dict[index] is None:
                         continue
-                    fg_color_mask[y,x,:],tot = find_fg(mean_dict[index], var_dict[index],500,0.02)
+
+                    for c1 in range(clusters):
+                        for c2 in range(clusters):
+                            if c1==c2:
+                                p_c1_given_data = (1 / np.sqrt(2 * np.pi * var_dict[index][c1])) * np.exp(
+                                    -1 * np.power(np.arange(256) - mean_dict[index][c1], 2) / (2 * var_dict[index][c1]))
+
+                                tmp = (p_c1_given_data ) / (prob_dict[index][c1])
+                                tmp = tmp + (tmp < 1e-15).astype('int')
+                                H[y, x, c1, c2] = -np.sum(tmp * np.log2(tmp))
+
+                            if c1<c2:
+
+                                p_c1_given_data = (1 / np.sqrt(2 * np.pi * var_dict[index][c1])) * np.exp(-1 * np.power(np.arange(256) - mean_dict[index][c1], 2) / (2 * var_dict[index][c1]))
+                                p_c2_given_data = (1 / np.sqrt(2 * np.pi * var_dict[index][c2])) * np.exp(
+                                    -1 * np.power(np.arange(256) - mean_dict[index][c2], 2) / (2 * var_dict[index][c2]))
+
+                                tmp = (p_c1_given_data+p_c2_given_data)/(prob_dict[index][c1]+prob_dict[index][c2])
+                                tmp = tmp + (tmp < 1e-15).astype('int')
+                                H[y,x,c1,c2] = -np.sum(tmp*np.log2(tmp))
+
+                    fg_color_mask[y,x,:],tot = find_fg(mean_dict[index], var_dict[index],H[y,x,:,:] ,2000,0.00)
 
                     
                     if index == "240,200":
