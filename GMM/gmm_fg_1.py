@@ -1,7 +1,8 @@
 import numpy as np
 import cv2,sys,time
-import pyqtgraph as pg
-
+#import pyqtgraph as pg
+#import line_profiler
+import scipy.stats as stats
 
 def gmm(data, clusters, ITERATIONS):
     # init
@@ -9,16 +10,12 @@ def gmm(data, clusters, ITERATIONS):
     data += 1
     
     length = data.size
-    condProb_cluster_pixel = np.zeros(shape=(clusters, length), dtype=np.float32)
+    condProb_cluster_pixel = np.random.randint(2,size=clusters*length).reshape(clusters, length).astype(np.float32)
     condProb_pixel_cluster = np.ndarray(shape=(length, clusters), dtype=np.float32)
 
     mean_cluster = np.ndarray(shape=(clusters,), dtype=np.float32)
     var_cluster = np.ones(shape=(clusters,), dtype=np.float32)
     prob_cluster = np.ndarray(shape=(clusters,), dtype=np.float32)
-
-    for x in range(length):
-        for c in range(clusters):
-            condProb_cluster_pixel[np.random.randint(0, clusters)][x] = 1
 
     for i in range(ITERATIONS):  # ITERATIONS
 
@@ -52,18 +49,18 @@ def gmm(data, clusters, ITERATIONS):
         for c in range(clusters):
             if var_cluster[c] < 1e-4:
                 continue
-            condProb_pixel_cluster[:, c] = (1 / np.sqrt(2 * np.pi * var_cluster[c])) * np.exp(
-                -1 * np.power(np.arange(length) - mean_cluster[c], 2) / (2 * var_cluster[c]))
+            condProb_pixel_cluster[:, c] = (1 / np.sqrt(2 * np.pi * var_cluster[c])) * np.exp(-1 * np.power(np.arange(length) - mean_cluster[c], 2) / (2 * var_cluster[c]))
 
         # prob(cluster | pixel)
         for c in range(clusters):
             if var_cluster[c] < 1e-4:
                 continue
-            _N = condProb_pixel_cluster[:, c] * data
-            _D = np.sum(condProb_pixel_cluster * np.repeat(data, clusters).reshape((-1, clusters)), 1)
-            condProb_cluster_pixel[c] = (_N / _D)
+            N = condProb_pixel_cluster[:, c] * data
+            D = np.sum(condProb_pixel_cluster * np.repeat(data, clusters).reshape((-1, clusters)), 1)
+            condProb_cluster_pixel[c] = (N / D)
 
     return mean_cluster, var_cluster, condProb_cluster_pixel, condProb_pixel_cluster
+
 
 def find_fg(mean, var, var_thresh, prob_thresh):
     small_var_cluster = []
@@ -91,13 +88,8 @@ def find_fg(mean, var, var_thresh, prob_thresh):
     return mask, condProb_pixel_cluster[:,idx]
     '''
     mask = np.ones(256)
-    tot = np.zeros(256)
 
-    for val in range(256):
-        tmp = 0
-        for c in small_var_cluster:
-            tmp += condProb_pixel_cluster[val,c]
-        tot[val] = tmp
+    tot = np.sum(condProb_pixel_cluster[:,small_var_cluster], axis=1)
 
     max_tot = np.max(tot)
     if max_tot == 0:
@@ -110,36 +102,36 @@ def find_fg(mean, var, var_thresh, prob_thresh):
 
     return mask, tot
 
+
 def build_fg_mask(history, fg_color_mask):
     height, width = len(history[0]), len(history[0][0])
     fg_mask = np.zeros((len(history), height, width, 1))
 
-    N = len(history)
     print("Finding fg matrix")
-    tot_iter = N*width*height
+    tot_iter = width*height
     counter = 0
     comp = 0
     start_t = time.time()
-    for i in range(N):
-        for x in range(width):
-            for y in range(height):
-                counter += 1
-                if (counter % int(tot_iter/100) == 0):
-                    sys.stdout.write('\r')
-                    comp += 1
-                    t_per_iter = (time.time()-start_t)/int(tot_iter/100)
-                    sys.stdout.write("[%-20s] %d%% ETA=%.2f" % ('='*int(comp/5), comp , (tot_iter - counter)*t_per_iter))
-                    sys.stdout.flush()
-                    start_t = time.time()
-                        
-                fg_mask[i, y, x, 0] = fg_color_mask[y,x,history[i,y,x,1]]
+
+    for x in range(width):
+        for y in range(height):
+            counter += 1
+            if (counter % int(tot_iter/100) == 0):
+                sys.stdout.write('\r')
+                comp += 1
+                t_per_iter = (time.time()-start_t)/int(tot_iter/100)
+                sys.stdout.write("[%-20s] %d%% ETA=%.2f" % ('='*int(comp/5), comp , (tot_iter - counter)*t_per_iter))
+                sys.stdout.flush()
+                start_t = time.time()
+
+            fg_mask[:, y, x, 0] = fg_color_mask[y,x,history[:,y,x,1]]
     print("")
     return fg_mask
 
-def plot_helper(curves, data):
+'''def plot_helper(curves, data):
     for i in range(len(curves)):
         curves[i].setData(data[i])
-    pg.QtGui.QApplication.processEvents()
+    pg.QtGui.QApplication.processEvents()'''
 
 def load_log( clusters, iter, start, end, file, height, width):
     log = open("log.txt",'r')
@@ -180,24 +172,25 @@ def display_results(start, end, _input, _output):
 if __name__ == '__main__':
 
     cap = cv2.VideoCapture("output_video.avi")
-    frame_num = 1401
+    frame_num = 4901
+    clusters = 5
+    iterations = 10
+    N = 700
 
     file_name = './dataset/dynamicBackground/boats/input/in{0:0>6}.jpg'
 
     frame = cv2.imread(file_name.format(frame_num))
     #_,frame = cap.read()
-    clusters = 5
-    iterations = 10
+
 
     _height, _width = frame.shape[0], frame.shape[1]
     image_name = '{} {}X{}'.format(file_name, _height, _width)
     print(_height, _width)
 
-    N = 700
     history = np.zeros((N, _height, _width, 3), dtype=int)
     history[0, :, :, :] = frame
     
-    pw = pg.GraphicsWindow()
+    '''pw = pg.GraphicsWindow()
     pl = pw.addPlot()
     pl.setYRange(0, 1, padding=0)
 
@@ -206,7 +199,7 @@ if __name__ == '__main__':
     g_curves = []
     for i in range(clusters):
         g_curves.append(pl.plot(fillLevel=i,pen=(i,clusters)))
-    pg.QtGui.QApplication.processEvents()
+    pg.QtGui.QApplication.processEvents()'''
     
     start = 0
     end = _height
@@ -263,7 +256,6 @@ if __name__ == '__main__':
                     log.write("VAR " + index +" "+ ",".join(map(str, var_cluster))+'\n')
             print('\n')
 
-
             # finding fg color masks
             print("finding color masks")
             counter,start_t = 0,time.time()
@@ -284,18 +276,18 @@ if __name__ == '__main__':
                         continue
                     fg_color_mask[y,x,:],tot = find_fg(mean_dict[index], var_dict[index],500,0.02)
 
-                    
+                    '''
                     if index == "240,200":
                         data = np.zeros(256)
                         for i in range(N):
                             data[history[i, y, x, 1]] += 1
-                        plot_helper([hist, min_var_tot, color_mask],[data/np.max(data), tot, fg_color_mask[y,x,:]])
+                        plot_helper([hist, min_var_tot, color_mask],[data/np.max(data), tot, fg_color_mask[y,x,:]])'''
             print('\n')
 
             # finding fg
             fg = build_fg_mask(history, fg_color_mask)
 
-            writer = cv2.VideoWriter('fg{}.avi'.format(frame_num-N), -1, N, (_width, _height), False)
+            writer = cv2.VideoWriter('fg{}.avi'.format(frame_num-N), -1, 24, (_width, _height), False)
             for i in range(N):
                 writer.write((255*fg[i]).astype('uint8'))
             writer.release()
@@ -307,5 +299,4 @@ if __name__ == '__main__':
         if cv2.waitKey(20) & 0xFF == 27:
             break
 
-    _ = input()
     cv2.destroyAllWindows()
