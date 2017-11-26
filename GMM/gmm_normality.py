@@ -12,7 +12,9 @@ def normality(means,vars,pr_cluster_data,data):
     #data[256]
 
     CLUSTERS=len(means)
-    residue=np.zeros((CLUSTERS))
+    residue=np.zeros((CLUSTERS),dtype=float)
+    pr_fg_cluster=np.zeros((CLUSTERS),dtype=float)
+
 
     for cl in range(CLUSTERS):
 
@@ -24,8 +26,20 @@ def normality(means,vars,pr_cluster_data,data):
         residue[cl]=squareDifference(normalFit,thisCluster)
 
 
+    for cl in range(CLUSTERS):
+        pr_fg_cluster=np.divide(residue[cl],np.sum(residue))
 
-    print(means,vars,residue) #print all these 3 for every cluster
+    #this is the probability of a particular cluster belonging to the foreground.
+    #export the video and see with
+        #a. Digital for a probability thresold
+        #b. Greyscale
+
+
+
+
+
+#    print(means,vars,residue,np.multiply(residue,vars)) #print all these 3 for every cluster
+
 
 
 
