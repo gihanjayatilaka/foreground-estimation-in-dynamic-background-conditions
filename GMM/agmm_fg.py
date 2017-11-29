@@ -10,151 +10,60 @@ def signal_handler(signal, frame):
         print('You pressed Ctrl+C!')
         sys.exit(0)
 
-
-def gmm(data, clusters, ITERATIONS):
+def gmm(freq, clusters, ITERATIONS):
     # init
-    data.astype('float')
-    data += 1
-    
-    length = data.size
-    condProb_cluster_pixel = np.zeros(shape=(clusters, length), dtype=np.float32)
-    condProb_pixel_cluster = np.ndarray(shape=(length, clusters), dtype=np.float32)
 
-    mean_cluster = np.ndarray(shape=(clusters,), dtype=np.float32)
-    var_cluster = np.ones(shape=(clusters,), dtype=np.float32)
-    prob_cluster = np.ndarray(shape=(clusters,), dtype=np.float32)
+    f = np.add(freq, 1)
 
-    for x in range(length):
-        for c in range(clusters):
-            condProb_cluster_pixel[np.random.randint(0, clusters)][x] = 1
+    height,width,length = f.shape
+    condProb_cluster_pixel = np.random.randint(2, size=height*width*clusters * length).reshape(height,width,clusters, length).astype(np.float32)
+    condProb_pixel_cluster = np.ndarray(shape=(height,width,length, clusters), dtype=np.float32)
+
+    mean_cluster = np.ndarray(shape=(height,width,clusters,), dtype=np.float32)
+    var_cluster = np.ones(shape=(height,width,clusters,), dtype=np.float32)
+    prob_cluster = np.ndarray(shape=(height,width,clusters,), dtype=np.float32)
+
+    linspace = np.arange(length).repeat(height*width).reshape(length,width, height).transpose()
 
     for i in range(ITERATIONS):  # ITERATIONS
-
+        print(i)
         # cluster means
         for c in range(clusters):
-            if var_cluster[c] < 1e-4:
-                continue
-            D = np.sum(condProb_cluster_pixel[c] * data)
-            N = np.sum(condProb_cluster_pixel[c] * data * np.arange(length))
-            mean_cluster[c] = N / D
+
+            D = np.sum(condProb_cluster_pixel[:,:,c,:] * f, axis=2)
+            N = np.sum(condProb_cluster_pixel[:,:,c,:] * f * linspace, axis=2)
+            mean_cluster[:,:,c] = N / D
 
         # cluster variances
         for c in range(clusters):
-            if var_cluster[c] < 1e-4:
-                continue
-            D = np.sum(condProb_cluster_pixel[c] * data)
-            N = np.sum(condProb_cluster_pixel[c] * data * np.power(np.arange(length) - mean_cluster[c], 2))
-            var_cluster[c] = N / D
-            if var_cluster[c] < 1e-4:
-                var_cluster[c] = 1e-4
 
-        # cluster probabilitis
+            D = np.sum(condProb_cluster_pixel[:,:,c,:] * f, axis=2) + 1
+            diff =  linspace- mean_cluster[:,:,c].repeat(256).reshape(height,width,-1)
+            N = np.sum(condProb_cluster_pixel[:,:,c,:] * f * np.power(diff , 2), axis=2)
+            var_cluster[:,:,c] = N / D
+
+        # cluster probabilities
         for c in range(clusters):
-            if var_cluster[c] < 1e-4:
-                continue
-            D = len(condProb_cluster_pixel[c])
-            N = np.sum(condProb_cluster_pixel[c])
-            prob_cluster[c] = N / D
+            D = length
+            N = np.sum(condProb_cluster_pixel[:,:,c,:], axis=2)
+            prob_cluster[:, :, c] = N / D
 
         # prob(pixel | cluster)
         for c in range(clusters):
-            if var_cluster[c] < 1e-4:
-                continue
-            condProb_pixel_cluster[:, c] = (1 / np.sqrt(2 * np.pi * var_cluster[c])) * np.exp(
-                -1 * np.power(np.arange(length) - mean_cluster[c], 2) / (2 * var_cluster[c]))
+            condProb_pixel_cluster[:,:,:, c] = stats.norm(mean_cluster[:, :, c].reshape(height,width,1), np.sqrt(var_cluster[:, :, c].reshape(height,width,1))).pdf(np.arange(length))
+            #for x in range(width):
+            #    for y in range(height):
+            #        condProb_pixel_cluster[y,x,:,c] =(1 / np.sqrt(2 * np.pi * var_cluster[y,x,c])) * np.exp(-1 * np.power(np.arange(length) - mean_cluster[y,x,c], 2) / (2 * var_cluster[y,x,c]))
 
         # prob(cluster | pixel)
+        D = np.sum(condProb_pixel_cluster * f.repeat(clusters).reshape((height, width, length, clusters)), 3)
         for c in range(clusters):
-            if var_cluster[c] < 1e-4:
-                continue
-            _N = condProb_pixel_cluster[:, c] * data
-            _D = np.sum(condProb_pixel_cluster * np.repeat(data, clusters).reshape((-1, clusters)), 1)
-            condProb_cluster_pixel[c] = (_N / _D)
+            N = condProb_pixel_cluster[:,:,:, c] * f
+            condProb_cluster_pixel[:,:,c] = (N / D)
 
     return mean_cluster, var_cluster, prob_cluster
 
-
-def update_gaussians_and_find_fg_color_mask_for_pixel(x_new, mean, var, prob, alpha, var_thresh, prob_thresh):
-    """
-    param:
-    x_new - new value for the given pixel
-    mean - array of mean values for the given pixel
-    var - array of variance values for the given pixel
-    prob - probability of the gaussian array for the given pixel
-
-    alpha - learning rate
-    var_thresh - variance threshold value
-    prob_thresh - minimum probability threshold value
-    """
-    
-    # finding the best gaussian match for x_new
-    # x_new in 2.5 std deviation
-    close_gaussians = []
-    closest_gaussian, min_std_dev = 0,1e10
-    for c in range(len(var)):
-        if abs(x_new - mean[c]) < 2.5*np.sqrt(var[c]):
-            close_gaussians.append(c)
-            if abs(x_new - mean[c]) < min_std_dev:
-                min_std_dev = abs(x_new - mean[c])
-                closest_gaussian = c
-    if (var[closest_gaussian]>var_thresh):
-        print(var[closest_gaussian], closest_gaussian, var)
-    # updating gaussians
-
-    # updating probability of clusters
-    for c in range(len(mean)):
-        if c == closest_gaussian:
-            prob[c] = prob[c] + alpha * (1 - prob[c])
-        else:
-            prob[c] = prob[c] + alpha * (0 - prob[c])
-
-    rho = 1e-2 + alpha* (1 / np.sqrt(2 * np.pi * var[closest_gaussian])) * np.exp(-1 * np.power(x_new - mean[closest_gaussian], 2) / (2 * var[closest_gaussian]))
-    
-    #print(x_new, "gaussian", "mean", mean[closest_gaussian], "var", var[closest_gaussian],"rho",rho)
-
-    # updating mean
-    mean[closest_gaussian] = mean[closest_gaussian] + rho * (x_new - mean[closest_gaussian]) * 2
-
-    # updating variance
-    var[closest_gaussian] = var[closest_gaussian] + rho * ((x_new - mean[closest_gaussian])**2 - var[closest_gaussian])
-    if var[closest_gaussian]<1:
-        var[closest_gaussian] = 1
-    #print("new gaussian", "mean", mean[closest_gaussian], "var", var[closest_gaussian])
-
-
-    # finding the gaussian with min var ---and max probability---    
-    mask = np.ones(256)
-    tmp = 0
-    idx = -1
-    for i in range(len(prob)):
-        q = prob[i]/var[i]
-        if (q>tmp):
-            idx = i
-            tmp = q
-
-    t = np.sqrt(var[idx])*3
-    for i in range(256):
-        if i > mean[idx] - t and i < mean[idx] + t:
-            mask[i] = 0
-
-    return mask, []#(1 / np.sqrt(2 * np.pi * var[idx])) * np.exp(-1 * np.power(np.arange(256) - mean[idx], 2) / (2 * var[idx]))
-
-@profile
 def update_gaussians(X, mean, var, prob, alpha, clusters):
-    """
-    param:
-    x_new - 2d new values | shape - (height, width)
-    mean - 3d array of mean values
-    var - 3d array of variance values
-    prob - probability of the gaussian array
-
-    alpha - learning rate
-    var_thresh - variance threshold value
-    prob_thresh - minimum probability threshold value
-    """
-    
-    # finding the best gaussian match for x_new
-    # x_new in 2.5 std deviation
 
     _height, _width = X.shape
 
@@ -167,29 +76,37 @@ def update_gaussians(X, mean, var, prob, alpha, clusters):
     # updating gaussians
 
     # updating probability of clusters
-    prob = prob + alpha*(cond_min_dist - prob)
+    prob = prob + alpha*(cond_min_dist - prob)*10
 
-    rho = 1e-2 + alpha*stats.norm(mean,var).pdf(x_new_3d)
+    rho = 1e-3 + alpha*stats.norm(mean,np.sqrt(var)).pdf(x_new_3d)
 
     # updating mean
-    mean = mean + rho * (x_new_3d - mean) * cond_min_dist
+    mean = mean + rho * (x_new_3d - mean) * cond_min_dist *100
+    #mean = mean + rho * (x_new_3d - mean) * (1 - cond_min_dist)*1
 
     # updating variance
-    var = var + rho * ((x_new_3d - mean)**2 - var)*cond_min_dist
+    var = var + rho * ((x_new_3d - mean) ** 2 - var) * cond_min_dist * 1
+    #var = var + rho * ((x_new_3d - mean) ** 2 - var) * (1-cond_min_dist) * 0.1
 
     return mean,var,prob
-@profile
-def find_fg(frame, mean, var, prob, clusters):
+
+def find_fg(frame, mean, var, prob, clusters, var_offset=10, amp_gain=3, power_gain=40):
     # finding the gaussian with min var ---and max probability---
     _height, _width = frame.shape
-    w = prob/var
+    '''w = prob/var
     cond_best_gaus = (w == np.repeat(w.max(axis=2),clusters).reshape(_height,_width,clusters))
 
     t = np.sqrt(var*cond_best_gaus).max(axis=2)*2.5
     mean_given = (mean*cond_best_gaus).max(axis=2)
 
     fg_mask_frame = (np.abs(mean_given-frame)>t).astype('float')
-    
+    return fg_mask_frame'''
+
+
+    tmp = np.sum(stats.norm(mean,np.sqrt(var)+var_offset).pdf(frame.repeat(clusters).reshape(_height,_width,clusters))*prob,axis=2)
+
+    fg_mask_frame = (1 - tmp*amp_gain)**power_gain
+
     return fg_mask_frame
 
 def plot_helper(curves, data):
@@ -197,120 +114,142 @@ def plot_helper(curves, data):
         curves[i].setData(data[i])
     pg.QtGui.QApplication.processEvents()
 
-def load_log( clusters, iter, start, end, file, height, width):
-    log = open("log_agmm.txt",'r')
-
-    load = False
-    mean,var,prob = {},{},{}
-    for x in range(width):
-        for y in range(height):
-            mean["{},{}".format(x,y)] = None
-            var["{},{}".format(x,y)] = None
-            prob["{},{}".format(x,y)] = None
-
-    for line in log:
-        v = line.strip().split()
-        if v[0] == "NE":
-            if v[1:] == list(map(str,[clusters, iter, start, end, file])):
-                load = True
-            else:
-                load = False
-
-        if load:
-            if v[0] == "MEAN":
-                mean[v[1]] = list(map(float,v[2].split(',')))
-            elif v[0] == "VAR":
-                var[v[1]] = list(map(float, v[2].split(',')))
-            elif v[0] == "PROB":
-                prob[v[1]] = list(map(float, v[2].split(',')))
-    return mean, var, prob
-
-def display_results(start, end, _input, _output):
-    cap = cv2.VideoCapture(_output)
-    for i in range(start, end):
-        i_frame = cv2.imread(_input.format(i))
-        _, o_frame = cap.read()
-        cv2.imshow("input", i_frame)
-        cv2.imshow("output", o_frame)
-        if cv2.waitKey(20) & 0xFF == 27:
-            break
-    cv2.destroyAllWindows()
+def mouse(event, x, y, flags, param):
+    global y_tmp,x_tmp,fg_mask_freq
+    if event == cv2.EVENT_MOUSEMOVE:
+        print('Selected pixel', x, y)
+        y_tmp.append(y)
+        x_tmp.append(x)
 
 if __name__ == '__main__':
     frame_num = 1
-    clusters = 3
+    clusters = 5
     iterations = 10
     N = 100
-    y_tmp, x_tmp = 40, 200
+    amp_gain = 3
+    power_gain = 40
+    var_offset = 10
+
+    clusters_layer2=3
+
+    y_tmp, x_tmp = [0], [0]
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    file_name = './dataset/dynamicBackground/boats/input/in{0:0>6}.jpg'
+    cv2.namedWindow("fg")
+    cv2.setMouseCallback("fg", mouse)
+
+    file_name = './dataset/dynamicbackground/boats/input/in{0:0>6}.jpg'
     frame = cv2.imread(file_name.format(frame_num))
     _height, _width = frame.shape[0], frame.shape[1]
     image_name = '{} {}X{}'.format(file_name, _height, _width)
 
     history = np.zeros((N, _height, _width, 3), dtype='int')
     history[0, :, :, :] = frame
-
-    pixel_history = []
-
+    fg_mask_freq = np.zeros((_height, _width, 256),np.int16)
 
     pw = pg.GraphicsWindow()
     pl = pw.addPlot()
     pl.setYRange(0, 1, padding=0)
 
-    color_mask,hist,min_var_tot = pl.plot(fillLevel=0, brush=(255, 255, 255, 40)),pl.plot(pen=(1,2)),pl.plot( brush=(255, 0, 255, 100))
+    fg_mask_variation,hist,min_var_tot = pl.plot(fillLevel=0, pen=None,brush=(255, 255, 255, 10)),pl.plot(fillLevel=0, pen=None, brush=(255, 0, 255, 40)),pl.plot( brush=(255, 0, 255, 100))
 
+    fg_g_curves = []
+    for i in range(clusters_layer2):
+        fg_g_curves.append(pl.plot(brush=(255, 255, 255, 100)))
     g_curves = []
     for i in range(clusters):
-        g_curves.append(pl.plot(fillLevel=i,pen=(i,clusters)))
+        g_curves.append(pl.plot(pen=(i,clusters)))
+    g_curves.append(pl.plot(pen=(0, clusters)))
     pg.QtGui.QApplication.processEvents()
 
-    #writer = cv2.VideoWriter('agmmfg.avi', -1, N, (_width, _height), False)
+    writer = cv2.VideoWriter('agmmfg.avi', -1, 24, (_width, _height), False)
 
     mean_dict,var_dict, prob_dict = np.zeros((_height,_width,clusters)),np.zeros((_height,_width,clusters)),np.zeros((_height,_width,clusters))
+    fg_mean,fg_var,fg_prob= np.zeros((_height, _width, clusters_layer2)), np.zeros((_height, _width, clusters_layer2)), np.zeros((_height, _width, clusters_layer2))
     for x in range(_width):
         for y in range(_height):
+            for c in range(clusters_layer2):
+                fg_mean[y,x,c], fg_var[y,x,c], fg_prob[y,x,0] = 255 / 2 + np.random.randint(-100,100), 10, 1 / clusters_layer2
+
             for c in range(clusters):
                 mean_dict[y,x,c] = (c*255/(clusters - 1))
                 var_dict[y,x,c] = ((255/(clusters - 1)/2)**1)
                 prob_dict[y,x,c] = (1/clusters)
 
-    while (1):
+    while (frame_num<2000):
 
         frame = cv2.imread(file_name.format(frame_num))
         #_,frame = cap.read()
         try:
             history[frame_num % N, :, :, :] = frame
-            pixel_history.append(frame[y_tmp,x_tmp,1])
         except:
             break
+        frame = np.average(history[frame_num%N, :, :, :],2)
 
         # update gaussians
-        mean_dict, var_dict, prob_dict=update_gaussians(history[frame_num%N, :, :, 1],mean_dict,var_dict,prob_dict, 0.1,clusters)
-        if (frame_num>N):
-            fg=find_fg(history[frame_num%N, :, :, 1],mean_dict,var_dict,prob_dict,clusters)
-            x = x_tmp
-            y = y_tmp
-            data = np.zeros(256)
-            for i in range(N):
-                data[history[i,y,x,1]] += 1
-            plot_helper([hist], [data / np.max(data)])
+        mean_dict, var_dict, prob_dict = update_gaussians(frame,mean_dict,var_dict,prob_dict, 0.001,clusters)
 
-            for c in range(clusters):
-                plot_helper([g_curves[c]],[prob_dict[y,x,c]*3*(1 / np.sqrt(2 * np.pi * var_dict[y,x,c])) * np.exp(-1 * np.power(np.arange(256) -
-                                                                                                             mean_dict[y,x,c], 2) / (2 * var_dict[y,x,c]))])
+        fg=find_fg(frame,mean_dict,var_dict,prob_dict,clusters,var_offset,amp_gain,power_gain)
+
+        #fg_mean, fg_var, fg_prob = update_gaussians((255*fg).astype('int8'), fg_mean, fg_var, fg_prob, 0.0001, clusters_layer2)
+
+        if (frame_num%100==0):
+            tot_iter, counter, start_t = _height*_width, 0, time.time()
+            for y in range(_height):
+                for x in range(_width):
+                    if (counter % int(tot_iter / 100) == 0):
+                        sys.stdout.write('\r')
+                        comp = (y * _width + x + 1) / tot_iter
+                        t_per_iter = (time.time() - start_t) / int(tot_iter / 100)
+                        sys.stdout.write("[%-20s] %d%% ETA=%.2f" % (
+                        '=' * int(comp * 20), 100 * comp, (tot_iter - counter) * t_per_iter))
+                        sys.stdout.flush()
+                        start_t = time.time()
+                    counter += 1
+
+                    fg_mean[y,x], fg_var[y,x], fg_prob[y,x]= gmm(fg_mask_freq[y,x],clusters_layer2,20)
+
+        # for a given pixel fg varies betwen 0 and 1.
+        # now we need to find how this varies. if it vavries all the time. it may be a dynamic background
+        fg2 = find_fg(fg * 255, fg_mean, fg_var, fg_prob, clusters_layer2, 5, 10, 40)
+        cv2.imshow("fg2", fg2)
 
 
-            #writer.write((255*fg).astype('uint8'))
-            cv2.imshow("fg", fg)
+
+        # updating the fg frequencies (0 to 1 transformed to 0 to 256)
+        i = np.arange(_height).repeat(_width).reshape(_height,_width).flatten()
+        j = np.arange(_width).repeat(_height).reshape(_width,_height).transpose().flatten()
+        k = np.round(fg.flatten()*255).astype('int8')
+        fg_mask_freq[[i,j,k]]+=1
+
+        #plotting and other stuff
+        x = x_tmp[-1]
+        y = y_tmp[-1]
+        data = np.zeros(256)
+        for i in range(N):
+            data[np.average(history[i, y, x, :]).astype('int8')] += 1
+
+        fg_mean[y, x], fg_var[y, x], fg_prob[y, x] = gmm(fg_mask_freq[y, x], clusters_layer2, 20) # level2 gmm - fg freq
+
+        plot_helper([hist, fg_mask_variation], [data / np.max(data), fg_mask_freq[y,x]/fg_mask_freq[y,x].max()])
+        for c in range(clusters_layer2):
+            plot_helper([fg_g_curves[c]], [10*stats.norm(fg_mean[y,x,c],np.sqrt(fg_var[y,x,c])).pdf(np.arange(256))])
+        tot = np.zeros(256)
+        for c in range(clusters):
+            tmp = prob_dict[y,x,c]*stats.norm(mean_dict[y,x,c],np.sqrt(var_dict[y,x,c]+var_offset)).pdf(np.arange(256))
+            tot += tmp
+            plot_helper([g_curves[c]],[tmp*amp_gain])
+        plot_helper([g_curves[-1]], [(1-amp_gain*tot)**power_gain])
+
+
+        writer.write((255*fg).astype('uint8'))
+        cv2.imshow("fg", fg)
         print(frame_num)
         frame_num += 1
 
         if cv2.waitKey(20) & 0xFF == 27:
             break
 
-    #writer.release()
-    _ = input()
+    writer.release()
     cv2.destroyAllWindows()
