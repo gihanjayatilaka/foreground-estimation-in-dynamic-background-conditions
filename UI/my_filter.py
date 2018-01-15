@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import ndimage
 import argparse
+import cv2
 
 def GB_filter(FG, blur_radius, threshold, mask = 0, mask_in = None):
     GB_FG = ndimage.gaussian_filter(FG, blur_radius)
