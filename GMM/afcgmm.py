@@ -94,6 +94,43 @@ def update_gaussians(X, mean, var, prob, alpha, clusters):
 
     return mean,var,prob
 
+def update_cylinders(X, cyl, freq, mean, var, prob, beta,r,c,data):
+    height, width, clusters, _ = cyl.shape
+    for row in range(1):
+        for col in range(1):
+            row = r
+            col = c
+            order = np.argsort(prob[:,row,col,:]/var[:,row,col,:])
+            for clu in range(clusters):
+                i,j = np.where(order == clusters - clu - 1)
+                centroid = mean[:,row,col,clu]
+                centroid = np.average(data,axis=0)
+                d = X[row,col] - centroid
+                v = cyl[row, col, clu, :3]
+
+                L = np.dot(d,v/np.sum(v*v)**0.5)
+                L_2 = L*L
+                R_2 = np.dot(d,d) - L_2
+                if R_2 <0:
+                    R_2 = 1
+                rho = beta/(1 + np.average(prob[i,row,col,j]))
+
+                L_new_2 = (1-rho)*cyl[row,col,clu,4] + rho*(L_2)
+                R_new_2 = (1-rho)*cyl[row,col,clu,3] + rho*(R_2)
+
+                #gg = stats.norm(mean_dict[:,row,col,clu],np.sqrt(var_dict[:,row,col,clu])).pdf(np.arange(256))*prob[:,row,col,clu]
+                freq_falling_to_the_cluster = freq # find this correctly
+                c = np.average(freq_falling_to_the_cluster*np.arange(256), axis=1).reshape(3,1)
+                v_new = np.average(np.abs(freq_falling_to_the_cluster*np.arange(256)-c), axis=1) # zero the mean first
+                v_new /= np.sum(np.power(v_new,2))**0.5
+
+                print(rho,R_new_2**0.5,v_new, X[row,col] , centroid)
+                cyl[row,col,clu,:3] = v_new
+                cyl[row,col,clu,3] = R_new_2
+                cyl[row,col,clu,4] = L_new_2
+    return cyl
+
+
 def find_fg(frame, mean, var, prob, clusters, var_offset=10, amp_gain=3, power_gain=40,mode="all"):
     # finding the gaussian with min var ---and max probability---
     _height, _width = frame.shape
@@ -113,7 +150,7 @@ def find_fg(frame, mean, var, prob, clusters, var_offset=10, amp_gain=3, power_g
 
         fg_mask_frame = (np.abs(mean_given - frame) > t).astype('float')
         return fg_mask_frame
-    elif mode=="best continuous":
+    elif mode=="best c":
         w = prob / var
         cond_best_gaus = (w == np.repeat(w.max(axis=2), clusters).reshape(_height, _width, clusters))
 
@@ -128,20 +165,14 @@ def plot_helper(curves, data):
         curves[i].setData(data[i])
     pg.QtGui.QApplication.processEvents()
 
-def getCurves(window, clusters, clusters_layer2):
+def getCurves(window, clusters):
     pl = window.addPlot()
     pl.setYRange(0, 1, padding=0)
 
     curves = {}
 
-    curves['fg_mask_variation'] = pl.plot(fillLevel=0, pen=None, brush=(255, 255, 255, 10))
     curves['hist'] = pl.plot(fillLevel=0, pen=None, brush=(255, 0, 255, 40))
     curves['min_var_tot'] = pl.plot(brush=(255, 0, 255, 100))
-
-    fg_g_curves = []
-    for i in range(clusters_layer2):
-        fg_g_curves.append(pl.plot(brush=(255, 255, 255, 100)))
-    curves['fg_g_curves'] = fg_g_curves
 
     g_curves = []
     for i in range(clusters):
@@ -155,7 +186,9 @@ def getCurves(window, clusters, clusters_layer2):
 
 class Window3d(object):
 
-    def __init__(self,N):
+    def __init__(self,N,clusters):
+        self.clusters = clusters
+
         self.w = gl.GLViewWidget()
         self.w.opts['distance'] = 100
         self.w.setWindowTitle('RGB space')
@@ -173,6 +206,7 @@ class Window3d(object):
         gz = gl.GLGridItem()
         gz.translate(10, 10, 0)
         self.w.addItem(gz)
+
         self.curve1 = gl.GLLinePlotItem()
         self.curve2 = gl.GLLinePlotItem()
         self.curve3 = gl.GLLinePlotItem()
@@ -180,6 +214,14 @@ class Window3d(object):
         self.w.addItem(self.curve2)
         self.w.addItem(self.curve3)
         self.pca = decomposition.PCA(n_components=3)
+
+        self.cyl=[]
+        for i in range(clusters):
+            CYL = gl.MeshData.cylinder(rows=10, cols=20, radius=[1., 1.0], length=5.)
+            self.cyl.append(gl.GLMeshItem(meshdata=CYL, smooth=True, drawEdges=True, edgeColor=(1, 0, 0, 0.1), shader='balloon'))
+            self.cyl[-1].setGLOptions('additive')
+            self.w.addItem(self.cyl[-1])
+
         self.traces = dict()
         for i in range(N):
             pts = np.array([0, 0, 0])/14
@@ -200,17 +242,35 @@ class Window3d(object):
         self.pca.fit(data)
         V = self.pca.components_
         x_pca_axis, y_pca_axis, z_pca_axis = 30 * V.T
-        X_tr = self.pca.transform(data)
-        mean = np.average(data, axis=0)
+        #X_tr = self.pca.transform(data)
+        mean = np.average(data/14, axis=0)
         self.curve1.setData(pos=np.array([mean, [x_pca_axis[0], y_pca_axis[0], z_pca_axis[0]]]))
         self.curve2.setData(pos=np.array([mean, [x_pca_axis[1], y_pca_axis[1], z_pca_axis[1]]]))
         self.curve3.setData(pos=np.array([mean, [x_pca_axis[2], y_pca_axis[2], z_pca_axis[2]]]))
 
+    def update_cylinders(self, cyl_info, centriods,p):
+        # cyl_info - clusters x 5
+        # centroids - 3 x clusters
+        for i in range(self.clusters):
+            vec = cyl_info[i,:3]
+            vec = vec/(np.sum(np.power(vec,2))**0.5)
+            r = (cyl_info[i,3]**0.5)/14
+            l = (cyl_info[i,4]**0.5)/14
+
+            self.cyl[i].resetTransform()
+            CYL = gl.MeshData.cylinder(rows=10, cols=20, radius=[r, r], length=2*l)
+            self.cyl[i].setMeshData(meshdata=CYL)
+            self.cyl[i].setColor(pg.glColor(255,255,255, np.average(p[:,i])*100))
+
+            a = np.rad2deg(np.arccos(vec[2]/(np.sum(vec**2)**0.5)))
+            self.cyl[i].rotate(a, -vec[0], vec[1], 0)
+            c = [centriods[0,i]/14 - vec[0]*l,centriods[1,i]/14 - vec[1]*l,centriods[2,i]/14-vec[2]*l]
+            self.cyl[i].translate(c[0],c[1],c[2])
 
 
 def mouse(event, x, y, flags, param):
     global y_tmp,x_tmp,fg_mask_freq
-    if event == cv2.EVENT_MOUSEMOVE:
+    if event == cv2.EVENT_LBUTTONDOWN:
         print('Selected pixel', x, y)
         y_tmp[0]=y
         x_tmp[0]=x
@@ -224,11 +284,7 @@ if __name__ == '__main__':
     power_gain = 5
     var_offset = 10
 
-    clusters_layer2=5
-
     y_tmp, x_tmp = [0], [0]
-
-    signal.signal(signal.SIGINT, signal_handler)
 
     cv2.namedWindow("fg")
     cv2.setMouseCallback("fg", mouse)
@@ -241,17 +297,14 @@ if __name__ == '__main__':
     # initializing matrices
     history = np.zeros((N, _height, _width, 3), dtype='int')
     history[0, :, :, :] = frame
-    fg_mask_freq = np.zeros((_height, _width, 256),np.int16)
 
     mean_dict, var_dict, prob_dict = np.zeros((3, _height, _width, clusters)), np.zeros(
         (3, _height, _width, clusters)), np.zeros((3, _height, _width, clusters))
-    fg_mean, fg_var, fg_prob = np.zeros((_height, _width, clusters_layer2)), np.zeros(
-        (_height, _width, clusters_layer2)), np.zeros((_height, _width, clusters_layer2))
+
+    cylinder = np.ones((_height,_width,clusters,5)) # v1,v2,v3,R,L
+
     for x in range(_width):
         for y in range(_height):
-            for c in range(clusters_layer2):
-                fg_mean[y,x,c], fg_var[y,x,c], fg_prob[y,x,0] = 255 / 2 + np.random.randint(-100,100), 10, 1 / clusters_layer2
-
             for c in range(clusters):
                 mean_dict[:,y,x,c] = (c*255/(clusters - 1))
                 var_dict[:,y,x,c] = ((255/(clusters - 1)/2)**1)
@@ -259,25 +312,29 @@ if __name__ == '__main__':
 
     # initializing plotting windows and curves
     pw = pg.GraphicsWindow()
-    curves0 = getCurves(pw, clusters, clusters_layer2)
-    curves1 = getCurves(pw, clusters, clusters_layer2)
-    curves2 = getCurves(pw, clusters, clusters_layer2)
-    w3d = Window3d(N)
+    curves0 = getCurves(pw, clusters)
+    curves1 = getCurves(pw, clusters)
+    curves2 = getCurves(pw, clusters)
+    w3d = Window3d(N,clusters)
 
     # initializing video writers
     writer = cv2.VideoWriter('agmmfg.avi', -1, 24, (_width, _height), False)
-    writer2 = cv2.VideoWriter('agmm2fg.avi', -1, 24, (_width, _height), False)
 
-
-    while (frame_num<1500):
-
+    for _ in range(N):
         frame = cv2.imread(file_name.format(frame_num))
-        #_,frame = cap.read()
         try:
             history[frame_num % N, :, :, :] = frame
         except:
             break
-        # frame = np.average(history[frame_num%N, :, :, :],2)
+        frame_num+=1
+    while (frame_num<2000):
+
+        frame = cv2.imread(file_name.format(frame_num))
+
+        try:
+            history[frame_num % N, :, :, :] = frame
+        except:
+            break
 
         # update gaussians
         mean_dict[0], var_dict[0], prob_dict[0] = update_gaussians(frame[:, :, 0], mean_dict[0], var_dict[0],
@@ -287,45 +344,31 @@ if __name__ == '__main__':
         mean_dict[2], var_dict[2], prob_dict[2] = update_gaussians(frame[:, :, 2], mean_dict[2], var_dict[2],
                                                                    prob_dict[2], 0.1, clusters)
 
+
+
         fg = find_fg(frame[:, :, 0], mean_dict[0], var_dict[0], prob_dict[0],
-                     clusters, var_offset, amp_gain, power_gain, mode="all")
+                     clusters, var_offset, amp_gain, power_gain, mode="best c")
         cv2.imshow("fg", fg)
-        '''fg = find_fg(frame[:, :, 1], mean_dict[1], var_dict[1], prob_dict[1],
-                     clusters, var_offset, amp_gain, power_gain, mode="all")
-        cv2.imshow("fg GREEN", fg)
-        fg = find_fg(frame[:, :, 2], mean_dict[2], var_dict[2], prob_dict[2],
-                     clusters, var_offset, amp_gain, power_gain, mode="all")
-        cv2.imshow("fg BLUE", fg)'''
 
-        #fg_mean, fg_var, fg_prob = update_gaussians((255*fg).astype('int8'), fg_mean, fg_var, fg_prob, 0.0001, clusters_layer2)
-
-        if (frame_num%500==0):
-            fg_mean, fg_var, fg_prob= gmm(fg_mask_freq,clusters_layer2,10)
-
-        # for a given pixel fg varies betwen 0 and 1.
-        # now we need to find how this varies. if it vavries all the time. it may be a dynamic background
-        fg2 = find_fg(fg * 255, fg_mean, fg_var, fg_prob, clusters_layer2,var_offset=20, amp_gain=10, power_gain=80,mode="all")
-
-
-
-
-        # updating the fg frequencies (0 to 1 transformed to 0 to 256)
-        i = np.arange(_height).repeat(_width).reshape(_height,_width).flatten()
-        j = np.arange(_width).repeat(_height).reshape(_width,_height).transpose().flatten()
-        k = np.round(fg.flatten()*255).astype('int8')
-        fg_mask_freq[[i,j,k]]+=1
 
         #plotting and other stuff
         x = x_tmp[-1]
         y = y_tmp[-1]
-        data = np.zeros((3,256))
-        for i in range(N):
-            data[0,history[i, y, x, 0]] += 1
-            data[1, history[i, y, x, 1]] += 1
-            data[2, history[i, y, x, 2]] += 1
 
-        w3d.update(history[:,y,x,:])
-        plot_helper([curves0['hist'],curves1['hist'],curves2['hist']], [data[0] / np.max(data[0]),data[1] / np.max(data[1]),data[2] / np.max(data[2])])
+
+        freq = np.zeros((3,256))
+        for i in range(N):
+            freq[0,history[i, y, x, 0]] += 1
+            freq[1, history[i, y, x, 1]] += 1
+            freq[2, history[i, y, x, 2]] += 1
+
+        cylinder = update_cylinders(frame, cylinder, freq, mean_dict, var_dict, prob_dict, 0.01, y, x,history[:, y, x, :])
+        w3d.update(history[:, y, x, :])
+        w3d.update_cylinders(cylinder[y, x, :, :], np.average(history[:,y,x,:],0).repeat(clusters).reshape(3,-1),prob_dict[:,y,x,:])
+
+        plot_helper([curves0['hist']], [freq[0] / np.max(freq[0])])
+        plot_helper([curves1['hist']], [freq[1] / np.max(freq[1])])
+        plot_helper([curves2['hist']], [freq[2] / np.max(freq[2])])
 
         tot = np.zeros(256)
         for c in range(clusters):
@@ -335,26 +378,21 @@ if __name__ == '__main__':
         plot_helper([curves0['g_curves'][-1]], [(1-amp_gain*tot)**power_gain])
         tot = np.zeros(256)
         for c in range(clusters):
-            tmp = prob_dict[1,y,x,c]/np.sqrt(var_dict[1,y,x,c])*stats.norm(mean_dict[1,y,x,c],np.sqrt(var_dict[1,y,x,c]+var_offset)).pdf(np.arange(256))
+            tmp = prob_dict[1, y, x, c] / np.sqrt(var_dict[1, y, x, c]) * stats.norm(mean_dict[1, y, x, c], np.sqrt(
+                var_dict[1, y, x, c] + var_offset)).pdf(np.arange(256))
             tot += tmp
-            plot_helper([curves1['g_curves'][c]],[tmp*amp_gain])
-        plot_helper([curves1['g_curves'][-1]], [(1-amp_gain*tot)**power_gain])
+            plot_helper([curves1['g_curves'][c]], [tmp * amp_gain])
+        plot_helper([curves1['g_curves'][-1]], [(1 - amp_gain * tot) ** power_gain])
         tot = np.zeros(256)
         for c in range(clusters):
-            tmp = prob_dict[2,y,x,c]/np.sqrt(var_dict[2,y,x,c])*stats.norm(mean_dict[2,y,x,c],np.sqrt(var_dict[2,y,x,c]+var_offset)).pdf(np.arange(256))
+            tmp = prob_dict[2, y, x, c] / np.sqrt(var_dict[2, y, x, c]) * stats.norm(mean_dict[2, y, x, c], np.sqrt(
+                var_dict[2, y, x, c] + var_offset)).pdf(np.arange(256))
             tot += tmp
-            plot_helper([curves2['g_curves'][c]],[tmp*amp_gain])
-        plot_helper([curves2['g_curves'][-1]], [(1-amp_gain*tot)**power_gain])
-
-        for c in range(clusters_layer2):
-            plot_helper([curves0['fg_g_curves'][c]], [500*fg_prob[y,x,c]/np.sqrt(fg_var[y,x,c])*stats.norm(fg_mean[y,x,c],np.sqrt(fg_var[y,x,c])).pdf(np.arange(256))])
-        plot_helper([curves0['fg_mask_variation']],[fg_mask_freq[y,x]/fg_mask_freq[y,x].max()])
+            plot_helper([curves2['g_curves'][c]], [tmp * amp_gain])
+        plot_helper([curves2['g_curves'][-1]], [(1 - amp_gain * tot) ** power_gain])
 
         writer.write((255 * fg).astype('uint8'))
-        writer2.write((255 * fg2).astype('uint8'))
 
-
-        cv2.imshow("fg2", fg2)
         print(frame_num)
         frame_num += 1
 
@@ -362,5 +400,4 @@ if __name__ == '__main__':
             break
 
     writer.release()
-    writer2.release()
     cv2.destroyAllWindows()
